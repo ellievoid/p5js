@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Curved Line Jellyfish (p5.js)</title>
+  <style>
+    html, body { margin: 0; background: #080a14; overflow: hidden; }
+    canvas { display: block; margin: 0 auto; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+</head>
+<body>
+<script>
+// ---------------------------------------------------------------
+// Curved Line Jellyfish
+// Idee: Punkte auf einem Kreis, jeder Punkt wird über eine
+// Kurve mit dem gegenüberliegenden Punkt verbunden. Die Form der
+// Kurve bestimmen "Ankerpunkte" weit außerhalb des Kreises.
+// Viele Linien + niedrige Deckkraft = weiche, quallenartige Flächen.
+// ---------------------------------------------------------------
+
+// --- Parameter zum Herumspielen ---------------------------------
+const NUM_POINTS   = 800;   // Punkte auf dem Kreis (gerade Zahl!)
+const MAX_ANGLE    = 200;    // Anker-Winkelversatz in Grad (±)
+const ANCHOR_MIN   = 7;   // Anker-Abstand (x Radius), Minimum
+const ANCHOR_MAX   = 7;     // Anker-Abstand (x Radius), Maximum
+const RADIUS_WOBBLE = 0.60; // wie stark der Umriss "organisch" wird
+const NOISE_SCALE  = 0.1;   // kleiner = weichere Übergänge um den Kreis
+const HUE_MIN      = 170;   // Farbbereich (HSB, 0-360)
+const HUE_MAX      = 320;
+const LINE_ALPHA   = 15;     // Deckkraft pro Linie (0-100)
+const SPEED        = 0.006; // Animationsgeschwindigkeit
+const ANIMATE      = true;
+
+let t = 0;
+let seedOffset = 0;
+
+function setup() {
+  const s = min(windowWidth, windowHeight);
+  createCanvas(s, s);
+  colorMode(HSB, 360, 100, 100, 100);
+  noFill();
+  newSeed();
+}
+
+function newSeed() {
+  noiseSeed(floor(random(100000)));
+  seedOffset = random(1000);
+}
+
+// Perlin-Noise liegt meist zwischen 0.25 und 0.75 -> auf 0..1 dehnen
+function nm(n) {
+  return constrain(map(n, 0.25, 0.75, 0, 1), 0, 1);
+}
+
+// Noise, der rund um den Kreis nahtlos ist: statt eines Index
+// wird der Punkt (cos, sin) des Winkels als Noise-Koordinate benutzt.
+function circNoise(a, channel, time) {
+  const k = NOISE_SCALE;
+  return nm(noise(
+    cos(a) * k + seedOffset + channel * 37,
+    sin(a) * k + seedOffset + channel * 91,
+    time
+  ));
+}
+
+function draw() {
+  background(235, 45, 7);
+  translate(width / 2, height / 2);
+
+  const baseR = min(width, height) * 0.27;
+
+  // 1) Hauptpunkte, Ankerpunkte und Farben berechnen
+  const pts = [];
+  const anchors = [];
+  const hues = [];
+
+  for (let i = 0; i < NUM_POINTS; i++) {
+    const a = (TWO_PI * i) / NUM_POINTS;
+
+    // Hauptpunkt: Abstand zur Mitte wackelt leicht per Noise
+    const r = baseR * (1 - RADIUS_WOBBLE / 2 + circNoise(a, 0, t) * RADIUS_WOBBLE);
+    pts.push(createVector(cos(a) * r, sin(a) * r));
+
+    // Ankerpunkt: Winkel versetzt (±MAX_ANGLE) und weit weg vom Zentrum
+    const aAnchor = a + radians(map(circNoise(a, 1, t), 0, 1, -MAX_ANGLE, MAX_ANGLE));
+    const rAnchor = baseR * map(circNoise(a, 2, t), 0, 1, ANCHOR_MIN, ANCHOR_MAX);
+    anchors.push(createVector(cos(aAnchor) * rAnchor, sin(aAnchor) * rAnchor));
+
+    // Farbe (langsamer animiert als die Form)
+    hues.push(map(circNoise(a, 3, t * 0.5), 0, 1, HUE_MIN, HUE_MAX));
+  }
+
+  // 2) Gekrümmte Linien: Punkt i <-> gegenüberliegender Punkt
+  //    (nur die erste Hälfte, die zweite würde dieselbe Kurve doppelt zeichnen)
+  blendMode(ADD); // überlappende Linien leuchten auf
+  strokeWeight(1);
+  const half = NUM_POINTS / 2;
+  for (let i = 0; i < half; i++) {
+    const j = i + half;
+    const p1 = pts[i],     p2 = pts[j];
+    const a1 = anchors[i], a2 = anchors[j];
+
+    stroke((hues[i] + hues[j]) / 2, 65, 100, LINE_ALPHA);
+    // curve(): erster und letzter Punkt sind die Steuerpunkte,
+    // gezeichnet wird nur zwischen dem 2. und 3. Punkt.
+    curve(a1.x, a1.y, p1.x, p1.y, p2.x, p2.y, a2.x, a2.y);
+  }
+
+  // 3) Dünner Umriss: jeder Punkt mit seinem Nachbarn verbunden
+  blendMode(BLEND);
+  strokeWeight(1);
+  for (let i = 0; i < NUM_POINTS; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % NUM_POINTS];
+    stroke(hues[i], 40, 100, 45);
+    line(p.x, p.y, q.x, q.y);
+  }
+
+  if (ANIMATE) t += SPEED;
+}
+
+function mousePressed() { newSeed(); }          // Klick = neue Qualle
+function keyPressed()   { if (key === 's') saveCanvas('jellyfish', 'png'); }
+function windowResized() {
+  const s = min(windowWidth, windowHeight);
+  resizeCanvas(s, s);
+}
+</script>
+</body>
+</html>

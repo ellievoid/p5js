@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Curved Line Jellyfish – Touch + GSAP</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; background: #080a14; overflow: hidden;
+      /* Browser-Gesten (Scrollen, Zoomen, Pull-to-Refresh) abschalten,
+         damit alle Touch-Events bei uns ankommen */
+      touch-action: none;
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none;
+    }
+    canvas { display: block; touch-action: none; }
+    #hint {
+      position: fixed; left: 0; right: 0; bottom: 24px; text-align: center;
+      font: 14px/1.5 system-ui, sans-serif; color: rgba(255,255,255,.7);
+      pointer-events: none;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body>
+<div id="hint">Ziehen: verschieben · Zwei Finger: Größe &amp; Drehung · Tippen: neue Form</div>
+<script>
+// ---------------------------------------------------------------
+// Curved Line Jellyfish mit Touch-Steuerung und GSAP
+//
+// - Ein Finger ziehen    -> Qualle verschieben (schneller = wilder)
+// - Zwei Finger          -> Pinch = Größe, Twist = Drehung
+// - Tippen               -> neue Form + neue Farbe (weich überblendet)
+// - Mausrad (Desktop)    -> Größe
+//
+// p5 zeichnet nur. Alle Eingaben landen in `target`, GSAP glättet
+// sie in `view`, und draw() liest immer nur `view`.
+// ---------------------------------------------------------------
+
+// --- Parameter zum Herumspielen ---------------------------------
+const NUM_POINTS    = 300;   // Punkte auf dem Kreis (gerade Zahl!)
+const MAX_ANGLE     = 40;    // Anker-Winkelversatz in Grad (±)
+const ANCHOR_MIN    = 1.5;   // Anker-Abstand (x Radius), Minimum
+const ANCHOR_MAX    = 7;     // Anker-Abstand (x Radius), Maximum
+const RADIUS_WOBBLE = 0.30;  // wie organisch der Umriss ist
+const NOISE_SCALE   = 0.9;   // kleiner = weichere Übergänge
+const HUE_MIN       = 170;   // Farbbereich (HSB, 0-360)
+const HUE_MAX       = 320;
+const LINE_ALPHA    = 9;     // Deckkraft pro Linie (0-100)
+const SPEED         = 0.004; // Grundgeschwindigkeit der Animation
+const MIN_SCALE     = 0.3;
+const MAX_SCALE     = 3.5;
+
+// --- Zustand ----------------------------------------------------
+// view   = was gezeichnet wird (wird von GSAP animiert)
+// target = was der Finger gerade will (wird von GSAP "nachgezogen")
+const view   = { x: 0, y: 0, scale: 1, rot: 0, energy: 0, hueShift: 0, floatY: 0, seed: 0 };
+const target = { x: 0, y: 0, scale: 1, rot: 0 };
+
+let t = 0;
+let cnv;
+let qx, qy, qScale, qRot;   // gsap.quickTo-Setter
+
+// --- Eingabe ----------------------------------------------------
+const pointers = new Map();  // pointerId -> {x, y}
+let pinchBase = null;
+let tapInfo = null;
+const vel = { x: 0, y: 0 };
+let lastMoveTime = 0;
+
+const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+function setup() {
+  pixelDensity(min(2, window.devicePixelRatio || 1));
+  cnv = createCanvas(windowWidth, windowHeight);
+  colorMode(HSB, 360, 100, 100, 100);
+  noFill();
+
+  noiseSeed(floor(random(100000)));
+  view.seed = random(1000);
+
+  // quickTo: schnell aufrufbare Tweens, die immer sanft zum neuesten Zielwert laufen
+  qx     = gsap.quickTo(view, 'x',     { duration: 0.6, ease: 'power3.out' });
+  qy     = gsap.quickTo(view, 'y',     { duration: 0.6, ease: 'power3.out' });
+  qScale = gsap.quickTo(view, 'scale', { duration: 0.5, ease: 'power3.out' });
+  qRot   = gsap.quickTo(view, 'rot',   { duration: 0.5, ease: 'power3.out' });
+
+  // Sanftes Schweben, wenn niemand etwas macht
+  gsap.to(view, { floatY: 18, duration: 3.2, ease: 'sine.inOut', yoyo: true, repeat: -1 });
+
+  // Hinweis nach ein paar Sekunden ausblenden
+  gsap.to('#hint', { opacity: 0, delay: 6, duration: 1.2 });
+
+  const el = cnv.elt;
+  el.style.touchAction = 'none';
+  el.addEventListener('pointerdown',   onDown);
+  el.addEventListener('pointermove',   onMove);
+  el.addEventListener('pointerup',     onUp);
+  el.addEventListener('pointercancel', onUp);
+  el.addEventListener('wheel', onWheel, { passive: false });
+}
+
+function applyTargets() {
+  const lx = width * 0.6, ly = height * 0.6;   // Qualle kann nicht komplett verloren gehen
+  target.x = constrain(target.x, -lx, lx);
+  target.y = constrain(target.y, -ly, ly);
+  qx(target.x); qy(target.y); qScale(target.scale); qRot(target.rot);
+}
+
+// Bewegung "regt" die Qualle an: Energie steigt und federt danach elastisch zurück
+function excite(amount) {
+  gsap.to(view, {
+    energy: Math.min(1, Math.max(0, view.energy) + amount * 0.004),
+    duration: 0.15,
+    overwrite: 'auto',
+    onComplete: () => gsap.to(view, {
+      energy: 0, duration: 1.6, ease: 'elastic.out(1, 0.5)', overwrite: 'auto'
+    })
+  });
+}
+
+function makePinchBase() {
+  const [a, b] = [...pointers.values()];
+  return {
+    d: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+    ang: Math.atan2(b.y - a.y, b.x - a.x),
+    mx: (a.x + b.x) / 2,
+    my: (a.y + b.y) / 2,
+    scale: target.scale,
+    x: target.x,
+    y: target.y
+  };
+}
+
+function onDown(e) {
+  e.preventDefault();
+  cnv.elt.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  tapInfo = pointers.size === 1
+    ? { t: performance.now(), moved: 0 }
+    : null;                                   // zweiter Finger = kein Tap mehr
+  pinchBase = pointers.size >= 2 ? makePinchBase() : null;
+
+  vel.x = vel.y = 0;
+  lastMoveTime = performance.now();
+  gsap.to('#hint', { opacity: 0, duration: 0.4, overwrite: true });
+}
+
+function onMove(e) {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  e.preventDefault();
+
+  const dx = e.clientX - p.x;
+  const dy = e.clientY - p.y;
+  p.x = e.clientX;
+  p.y = e.clientY;
+  if (tapInfo) tapInfo.moved += Math.hypot(dx, dy);
+
+  const now = performance.now();
+  const dt = Math.max(1, now - lastMoveTime);
+  lastMoveTime = now;
+
+  if (pointers.size === 1) {
+    // --- Ein Finger: verschieben ---
+    target.x += dx;
+    target.y += dy;
+    vel.x = 0.8 * vel.x + 0.2 * (dx / dt);   // Geschwindigkeit (px/ms) für das Ausgleiten
+    vel.y = 0.8 * vel.y + 0.2 * (dy / dt);
+    applyTargets();
+    excite(Math.hypot(dx, dy));
+  } else if (pinchBase) {
+    // --- Zwei Finger: Pinch = Größe, Twist = Drehung, Mitte = Verschieben ---
+    const [a, b] = [...pointers.values()];
+    const d   = Math.hypot(b.x - a.x, b.y - a.y);
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    const mx  = (a.x + b.x) / 2;
+    const my  = (a.y + b.y) / 2;
+
+    target.scale = constrain(pinchBase.scale * d / pinchBase.d, MIN_SCALE, MAX_SCALE);
+    target.rot  += wrapAngle(ang - pinchBase.ang);   // inkrementell, damit es nicht springt
+    pinchBase.ang = ang;
+    target.x = pinchBase.x + (mx - pinchBase.mx);
+    target.y = pinchBase.y + (my - pinchBase.my);
+    applyTargets();
+    excite(Math.hypot(dx, dy) * 0.5);
+  }
+}
+
+function onUp(e) {
+  if (!pointers.delete(e.pointerId)) return;
+
+  if (pointers.size === 0 && tapInfo) {
+    const isTap = tapInfo.moved < 10 && performance.now() - tapInfo.t < 300;
+    if (isTap) {
+      morph();
+    } else if (performance.now() - lastMoveTime < 80) {
+      // Ausgleiten ("Wurf"): Schwung auf das Ziel addieren, GSAP bremst weich ab
+      target.x += vel.x * 300;
+      target.y += vel.y * 300;
+      applyTargets();
+    }
+    tapInfo = null;
+  }
+  pinchBase = pointers.size >= 2 ? makePinchBase() : null;
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  target.scale = constrain(target.scale * Math.exp(-e.deltaY * 0.0015), MIN_SCALE, MAX_SCALE);
+  applyTargets();
+  excite(10);
+}
+
+// Neue Form + Farbe: Die Noise-Koordinaten wandern, dadurch verwandelt sich
+// die Qualle fließend, statt umzuspringen.
+function morph() {
+  gsap.to(view, {
+    seed: view.seed + random(3, 8),
+    hueShift: view.hueShift + random(40, 100),
+    duration: 2.2,
+    ease: 'power2.inOut',
+    overwrite: 'auto'
+  });
+  // kleiner "Puls" als Feedback
+  gsap.fromTo(view, { energy: 0.7 }, {
+    energy: 0, duration: 1.8, ease: 'elastic.out(1, 0.5)', overwrite: 'auto'
+  });
+}
+
+// --- Zeichnen ---------------------------------------------------
+function nm(n) { return constrain(map(n, 0.25, 0.75, 0, 1), 0, 1); }
+
+function circNoise(a, channel, time) {
+  const k = NOISE_SCALE;
+  return nm(noise(
+    cos(a) * k + view.seed + channel * 37,
+    sin(a) * k + view.seed + channel * 91,
+    time
+  ));
+}
+
+function draw() {
+  background(235, 45, 7);
+
+  const e = constrain(view.energy, -0.2, 1);   // Energie beeinflusst Form und Tempo
+  const baseR = min(width, height) * 0.27;
+
+  translate(width / 2 + view.x, height / 2 + view.y + view.floatY);
+  rotate(view.rot);
+  scale(view.scale);
+
+  // 1) Punkte, Anker und Farben
+  const pts = [], anchors = [], hues = [];
+  for (let i = 0; i < NUM_POINTS; i++) {
+    const a = (TWO_PI * i) / NUM_POINTS;
+
+    const wob = RADIUS_WOBBLE * (1 + e * 1.5);
+    const r = baseR * (1 - wob / 2 + circNoise(a, 0, t) * wob);
+    pts.push(createVector(cos(a) * r, sin(a) * r));
+
+    const aAnchor = a + radians(map(circNoise(a, 1, t), 0, 1, -MAX_ANGLE, MAX_ANGLE));
+    const rAnchor = baseR * map(circNoise(a, 2, t), 0, 1, ANCHOR_MIN, ANCHOR_MAX) * (1 + e * 0.6);
+    anchors.push(createVector(cos(aAnchor) * rAnchor, sin(aAnchor) * rAnchor));
+
+    const h = map(circNoise(a, 3, t * 0.5), 0, 1, HUE_MIN, HUE_MAX) + view.hueShift;
+    hues.push(h);                            // bewusst ohne Modulo, damit der Mittelwert unten stimmt
+  }
+  const wrapHue = (h) => ((h % 360) + 360) % 360;
+
+  // 2) Gekrümmte Linien zu den gegenüberliegenden Punkten
+  blendMode(ADD);
+  strokeWeight(1 / view.scale);            // Linien bleiben beim Zoomen ~1px dick
+  const half = NUM_POINTS / 2;
+  for (let i = 0; i < half; i++) {
+    const j = i + half;
+    const p1 = pts[i], p2 = pts[j], a1 = anchors[i], a2 = anchors[j];
+    stroke(wrapHue((hues[i] + hues[j]) / 2), 65, 100, LINE_ALPHA * (1 + e * 0.5));
+    curve(a1.x, a1.y, p1.x, p1.y, p2.x, p2.y, a2.x, a2.y);
+  }
+
+  // 3) Umriss
+  blendMode(BLEND);
+  for (let i = 0; i < NUM_POINTS; i++) {
+    const p = pts[i], q = pts[(i + 1) % NUM_POINTS];
+    stroke(wrapHue(hues[i]), 40, 100, 45);
+    line(p.x, p.y, q.x, q.y);
+  }
+
+  t += SPEED * (1 + Math.max(0, e) * 5);
+}
+
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+</script>
+</body>
+</html>
