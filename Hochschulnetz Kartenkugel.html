@@ -1,0 +1,677 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Hochschulnetz Kartenkugel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: Vollbild-Bühne. Die Kartenkugel läuft in WebGL, Beschriftung und Detailansicht liegen als HTML darüber. Bewusst nur dunkel, wie ein Display im Foyer. */
+:root {
+  --ink: #07080c;
+  --ink-2: #10121a;
+  --paper: #eef0f5;
+  --muted: #9aa1b3;
+  --line: rgba(238, 240, 245, 0.2);
+  --f0: #e0457b;
+  --f1: #29b6d8;
+  --f2: #e9a23b;
+  --f3: #4cb68a;
+  --f4: #7b73ee;
+  --display: 'Bricolage Grotesque', 'Helvetica Neue', Arial, sans-serif;
+  --body: 'Instrument Sans', 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--body);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.bg {
+  position: fixed; inset: 0; z-index: 0;
+  --glow: rgb(27, 31, 48);
+  --base: rgb(7, 8, 12);
+  background: radial-gradient(ellipse 75% 70% at 50% 46%, var(--glow) 0%, var(--base) 72%);
+}
+.gl {
+  position: fixed; inset: 0; z-index: 1;
+  width: 100%; height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.gl:active { cursor: grabbing; }
+
+.brand {
+  position: fixed; z-index: 5;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  left: 16px; right: 16px;
+  pointer-events: none;
+}
+.brand-name { margin: 0; font: 600 15px/1.2 var(--display); letter-spacing: 0.02em; }
+.brand-note { margin: 4px 0 0; font: 400 11px/1.3 var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+.legend { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.legend li { display: inline-flex; align-items: center; gap: 7px; font: 400 11px/1 var(--mono); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+.legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+
+.hint {
+  position: fixed; z-index: 5;
+  left: 0; right: 0;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  pointer-events: none;
+  color: var(--paper);
+}
+.hint svg { display: block; max-width: 100%; }
+.hint-text { margin: 0; font: 700 clamp(28px, 4vw, 44px)/1 var(--display); letter-spacing: -0.01em; }
+
+.caption {
+  position: fixed; z-index: 5;
+  left: 0; right: 0;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  padding-inline: 16px;
+  text-align: center;
+  pointer-events: none;
+  visibility: hidden; opacity: 0;
+}
+.tag { display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
+.tag::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.title { margin: 10px auto 0; max-width: 22ch; font: 650 clamp(26px, 4.2vw, 52px)/1.04 var(--display); text-wrap: balance; }
+.meta { margin: 8px 0 0; font: 400 13px/1.3 var(--mono); color: var(--muted); }
+.cta { display: inline-block; margin-top: 14px; padding: 10px 18px; border: 1px solid var(--line); border-radius: 999px; font: 500 13px/1 var(--mono); letter-spacing: 0.06em; }
+
+.detail {
+  position: fixed; inset: 0; z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: clamp(20px, 4vw, 64px);
+  align-items: center;
+  padding: calc(76px + env(safe-area-inset-top, 0px)) clamp(16px, 5vw, 80px) calc(40px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  background: var(--detail-bg, var(--ink-2));
+  -webkit-user-select: text; user-select: text;
+}
+.detail-img { justify-self: center; width: auto; height: auto; max-width: 100%; max-height: 72vh; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45); }
+.detail-body { min-width: 0; }
+.detail-title { margin: 14px 0 0; font: 650 clamp(32px, 5vw, 68px)/1.02 var(--display); text-wrap: balance; }
+.facts { margin: 24px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 20px; font: 400 13px/1.4 var(--mono); }
+.facts dt { color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.facts dd { margin: 0; }
+.detail-text { margin: 24px 0 0; max-width: 52ch; font: 400 clamp(17px, 1.8vw, 22px)/1.5 var(--body); }
+.close {
+  position: fixed; z-index: 21;
+  top: calc(16px + env(safe-area-inset-top, 0px)); right: 16px;
+  min-height: 44px; padding: 0 20px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: rgba(7, 8, 12, 0.35); color: var(--paper);
+  font: 500 13px/1 var(--mono); letter-spacing: 0.08em; cursor: pointer;
+}
+.close:hover { background: rgba(238, 240, 245, 0.14); }
+.close:focus-visible, .gl:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
+
+.nogl { position: fixed; z-index: 6; inset: 0; margin: 0; display: grid; place-items: center; padding: 16px; text-align: center; font: 400 14px/1.5 var(--mono); color: var(--muted); }
+
+@media (max-width: 760px) {
+  .detail { grid-template-columns: minmax(0, 1fr); align-items: start; align-content: start; }
+  .detail-img { max-height: 34vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hint svg { display: none; }
+}
+</style>
+
+<div id="bg" class="bg" aria-hidden="true"></div>
+<canvas id="gl" class="gl" aria-label="Kugel aus Karten zu Projekten und Veranstaltungen. Wischen zum Drehen."></canvas>
+<p id="nogl" class="nogl" hidden>Diese Ansicht braucht WebGL. Bitte in einem aktuellen Browser öffnen.</p>
+
+<header class="brand">
+  <p class="brand-name">Hochschulnetz</p>
+  <p class="brand-note">Prototyp · Beispielinhalte</p>
+  <ul class="legend" id="legend"></ul>
+</header>
+
+<div id="hint" class="hint">
+  <svg viewBox="0 0 240 64" width="240" height="64" aria-hidden="true">
+    <path id="hintPath" d="M16 50 Q120 -10 224 50" fill="none" stroke="currentColor" stroke-opacity="0.3" stroke-width="2" stroke-dasharray="2 8" stroke-linecap="round"/>
+    <circle id="hintDot" r="11" cx="16" cy="50" fill="currentColor" opacity="0"/>
+  </svg>
+  <p id="hintText" class="hint-text">Dreh mich!</p>
+</div>
+
+<div id="caption" class="caption">
+  <span id="capTag" class="tag"></span>
+  <h2 id="capTitle" class="title"></h2>
+  <p id="capMeta" class="meta"></p>
+  <span class="cta">Tippen zum Öffnen</span>
+</div>
+
+<section id="detail" class="detail" role="dialog" aria-modal="true" aria-labelledby="detTitle" hidden>
+  <button id="detClose" class="close" type="button">Zurück</button>
+  <img id="detImg" class="detail-img" alt="">
+  <div class="detail-body">
+    <span id="detTag" class="tag"></span>
+    <h2 id="detTitle" class="detail-title"></h2>
+    <dl class="facts">
+      <dt>Art</dt><dd id="detKind"></dd>
+      <dt>Zeit</dt><dd id="detDate"></dd>
+      <dt>Fakultät</dt><dd id="detFac"></dd>
+    </dl>
+    <p id="detText" class="detail-text"></p>
+  </div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- Beispieldaten (später aus CMS oder JSON) ---------- */
+  var FAC = [
+    { name: 'Gestaltung',  hue: 335, hex: '#e0457b', rgb: [224, 69, 123] },
+    { name: 'Informatik',  hue: 192, hex: '#29b6d8', rgb: [41, 182, 216] },
+    { name: 'Architektur', hue: 36,  hex: '#e9a23b', rgb: [233, 162, 59] },
+    { name: 'Wirtschaft',  hue: 155, hex: '#4cb68a', rgb: [76, 182, 138] },
+    { name: 'Technik',     hue: 245, hex: '#7b73ee', rgb: [123, 115, 238] }
+  ];
+  var V = 'Veranstaltung', P = 'Projekt';
+  var DATA = [
+    { t: 'Rundgang Gestaltung', k: V, f: 0, d: '12.11.2026', x: 'Alle Werkstätten und Ateliers öffnen für einen Abend. Studierende zeigen ihre Semesterarbeiten und sprechen mit den Gästen darüber.' },
+    { t: 'Hackathon Campus', k: V, f: 1, d: '21.11.2026', x: '24 Stunden, 30 Teams, eine Aufgabe: Ideen für einen digitalen Campus entwickeln und am Sonntag vor Jury und Publikum vorstellen.' },
+    { t: 'Tag der Modelle', k: V, f: 2, d: '28.11.2026', x: 'Entwurfsmodelle im Maßstab 1:50 bis 1:500 werden ausgestellt und mit Gästen besprochen.' },
+    { t: 'Gründertag', k: V, f: 3, d: '10.12.2026', x: 'Gründerinnen und Gründer aus der Region berichten von ihren Wegen. Am Nachmittag läuft ein Pitch-Wettbewerb für eigene Ideen.' },
+    { t: 'Lange Nacht der Technik', k: V, f: 4, d: '26.11.2026', x: 'Die Labore für Elektrotechnik, Maschinenbau und Energie öffnen bis Mitternacht und laden zum Ausprobieren ein.' },
+    { t: 'Plakatwerkstatt', k: P, f: 0, d: 'Sommersemester 2026', x: 'Studierende gestalten Plakate für Kulturorte der Region und drucken sie im Siebdruck auf Papier und Stoff.' },
+    { t: 'Robotik AG', k: P, f: 1, d: 'laufend', x: 'Eine offene Arbeitsgruppe baut einen autonomen Lieferroboter, der sich selbstständig über das Gelände bewegt.' },
+    { t: 'Pavillon aus Holz', k: P, f: 2, d: 'Sommersemester 2026', x: 'Studierende planen und bauen einen Pavillon für den Campushof, vom Entwurf bis zur Montage.' },
+    { t: 'Planspiel Lieferkette', k: P, f: 3, d: 'Sommersemester 2026', x: 'In einem Planspiel steuern Teams eine Lieferkette durch Störungen und Engpässe und werten danach ihre Entscheidungen aus.' },
+    { t: 'Solarmobil Team', k: P, f: 4, d: 'laufend', x: 'Ein studentisches Team entwickelt ein Fahrzeug für einen Solarrennen-Wettbewerb und sucht Verstärkung.' },
+    { t: 'Typografie Open Studio', k: V, f: 0, d: '03.12.2026', x: 'Offenes Atelier mit Schriftentwürfen, Bleisatz und Gesprächen mit den Lehrenden.' },
+    { t: 'KI Sprechstunde', k: V, f: 1, d: '17.11.2026', x: 'Offene Fragerunde zu maschinellem Lernen, mit kleinen Live-Demos für Einsteigerinnen und Einsteiger.' },
+    { t: 'Stadtspaziergang Bestand', k: V, f: 2, d: '05.11.2026', x: 'Führung durch Umbauprojekte der Innenstadt, geleitet von Studierenden des Masters.' },
+    { t: 'Karrieremesse', k: V, f: 3, d: '19.11.2026', x: 'Über 40 Unternehmen treffen auf Studierende. Am Stand gibt es einen Check der Bewerbungsmappe.' },
+    { t: 'Werkstoffe im Test', k: V, f: 4, d: '08.12.2026', x: 'Live-Versuche zur Belastung von Stahl, Holz und Verbundwerkstoffen im Labor für Materialprüfung.' },
+    { t: 'Motion Reel Lab', k: P, f: 0, d: 'Wintersemester 2026/27', x: 'Kurze Animationsfilme aus dem Studiengang, entstanden in Teams aus Gestaltung und Informatik.' },
+    { t: 'Datenatlas Region', k: P, f: 1, d: 'Wintersemester 2026/27', x: 'Offene Verwaltungsdaten werden zu interaktiven Karten und Grafiken aufbereitet.' },
+    { t: 'Lehm und Licht', k: P, f: 2, d: 'Wintersemester 2026/27', x: 'Forschung zu Baustoffen aus Lehm und ihrer Wirkung auf das Raumklima.' },
+    { t: 'Regional Einkaufen', k: P, f: 3, d: 'Wintersemester 2026/27', x: 'Eine Studie untersucht, wie regionale Händler digitale Kanäle nutzen und was ihnen dabei fehlt.' },
+    { t: 'Wasserstoff Prüfstand', k: P, f: 4, d: 'Wintersemester 2026/27', x: 'Ein neuer Prüfstand misst die Wirkungsgrade kleiner Brennstoffzellen unter wechselnder Last.' }
+  ];
+
+  var IDLE = 20;            // Sekunden bis zurück zum Startbildschirm
+  var R = 5.2;              // Kugelradius
+  var PZ = 7;               // Z-Position der vergrößerten Karte
+  var BASE_TILT = 0.14;
+  var DEF_G = [27, 31, 48], DEF_B = [7, 8, 12];
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- Hilfen ---------- */
+  function rng(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function $(id) { return document.getElementById(id); }
+
+  /* ---------- Platzhalterbilder pro Fakultät (werden später durch echte Fotos ersetzt) ---------- */
+  var MOTIFS = [
+    function (g, w, h, r, hue) { // Gestaltung: weiche Farbflächen
+      g.globalCompositeOperation = 'lighter';
+      for (var k = 0; k < 9; k++) {
+        var x = r() * w, y = r() * h, rad = (0.12 + r() * 0.28) * Math.min(w, h) * 1.4;
+        var gr = g.createRadialGradient(x, y, 0, x, y, rad);
+        gr.addColorStop(0, 'hsla(' + (hue + r() * 70 - 20) + ',80%,60%,0.55)');
+        gr.addColorStop(1, 'hsla(' + hue + ',80%,50%,0)');
+        g.fillStyle = gr; g.beginPath(); g.arc(x, y, rad, 0, 7); g.fill();
+      }
+      g.globalCompositeOperation = 'source-over';
+      g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 2;
+      for (var j = 0; j < 3; j++) { g.beginPath(); g.arc(r() * w, r() * h, (0.1 + r() * 0.2) * w, 0, 7); g.stroke(); }
+    },
+    function (g, w, h, r, hue) { // Informatik: Balken und Raster
+      var cols = Math.floor(w / 22);
+      for (var k = 0; k < cols; k++) {
+        var bh = (0.1 + Math.pow(r(), 1.6) * 0.8) * h;
+        g.fillStyle = 'hsla(' + (hue + 30) + ',90%,' + (60 + r() * 25) + '%,' + (0.35 + r() * 0.5) + ')';
+        g.fillRect(k * 22 + 4, h - bh, 12, bh);
+      }
+      g.fillStyle = 'rgba(255,255,255,0.8)';
+      for (var i = 0; i < 60; i++) g.fillRect(r() * w, r() * h * 0.6, 3, 3);
+      g.strokeStyle = 'rgba(255,255,255,0.25)'; g.lineWidth = 1;
+      for (var y = 30; y < h; y += 30) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+    },
+    function (g, w, h, r, hue) { // Architektur: Fluchtpunkt und Rahmen
+      var vx = w * (0.3 + r() * 0.4), vy = h * (0.3 + r() * 0.2);
+      g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 1.5;
+      for (var k = 0; k < 22; k++) {
+        var a = k / 22 * Math.PI * 2;
+        g.beginPath(); g.moveTo(vx, vy); g.lineTo(vx + Math.cos(a) * w * 2, vy + Math.sin(a) * w * 2); g.stroke();
+      }
+      for (var j = 0; j < 5; j++) { var s = (j + 1) * 0.16; g.strokeRect(vx - w * s * 0.5, vy - h * s * 0.5, w * s, h * s); }
+      g.fillStyle = 'hsla(' + hue + ',70%,15%,0.55)'; g.fillRect(0, h * 0.72, w, h * 0.28);
+    },
+    function (g, w, h, r, hue) { // Wirtschaft: Säulen und Kurve
+      var n = 8, bw = w / (n * 1.5);
+      for (var k = 0; k < n; k++) {
+        var bh = (0.2 + k / n * 0.45 + r() * 0.2) * h;
+        g.fillStyle = 'hsla(' + hue + ',70%,' + (70 - k * 3) + '%,0.55)';
+        g.fillRect(w * 0.06 + k * bw * 1.5, h - bh, bw, bh);
+      }
+      g.strokeStyle = 'rgba(255,255,255,0.95)'; g.lineWidth = 4; g.beginPath();
+      for (var i = 0; i <= n; i++) {
+        var x = w * 0.06 + i * bw * 1.5 + bw / 2, y = h * (0.75 - i / n * 0.4 - r() * 0.12);
+        if (i) g.lineTo(x, y); else g.moveTo(x, y);
+      }
+      g.stroke();
+    },
+    function (g, w, h, r, hue) { // Technik: Ringe und Skala
+      var cx = w * (0.35 + r() * 0.3), cy = h * (0.35 + r() * 0.3);
+      g.strokeStyle = 'rgba(255,255,255,0.6)';
+      for (var k = 1; k < 9; k++) { g.lineWidth = k % 3 ? 1.2 : 3; g.beginPath(); g.arc(cx, cy, k * h * 0.07, 0, 7); g.stroke(); }
+      g.lineWidth = 1.5;
+      for (var i = 0; i < 48; i++) {
+        var a = i / 48 * Math.PI * 2;
+        g.beginPath(); g.moveTo(cx + Math.cos(a) * h * 0.5, cy + Math.sin(a) * h * 0.5);
+        g.lineTo(cx + Math.cos(a) * h * 0.56, cy + Math.sin(a) * h * 0.56); g.stroke();
+      }
+      g.fillStyle = 'rgba(255,255,255,0.9)'; g.beginPath(); g.arc(cx, cy, 6, 0, 7); g.fill();
+    }
+  ];
+
+  function makeImage(item, i) {
+    var r = rng(1000 + i * 77);
+    var portrait = r() < 0.25;
+    var w = portrait ? 360 : 640, h = portrait ? 480 : 456;
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var g = c.getContext('2d');
+    var hue = FAC[item.f].hue + (r() - 0.5) * 24;
+    var g1 = g.createLinearGradient(0, 0, w * r(), h);
+    g1.addColorStop(0, 'hsl(' + hue + ',55%,' + (18 + r() * 10) + '%)');
+    g1.addColorStop(1, 'hsl(' + (hue + 20) + ',70%,' + (48 + r() * 18) + '%)');
+    g.fillStyle = g1; g.fillRect(0, 0, w, h);
+    MOTIFS[item.f](g, w, h, r, hue);
+    var d = g.getImageData(0, 0, w, h), p = d.data;
+    for (var k = 0; k < p.length; k += 4) { var n = (r() - 0.5) * 26; p[k] += n; p[k + 1] += n; p[k + 2] += n; }
+    g.putImageData(d, 0, 0);
+    g.strokeStyle = 'rgba(255,255,255,0.92)'; g.lineWidth = 8; g.strokeRect(4, 4, w - 8, h - 8);
+    return c;
+  }
+
+  /* ---------- Legende ---------- */
+  var legend = $('legend');
+  FAC.forEach(function (f) {
+    var li = document.createElement('li');
+    var dot = document.createElement('i'); dot.style.setProperty('--c', f.hex);
+    li.appendChild(dot); li.appendChild(document.createTextNode(f.name));
+    legend.appendChild(li);
+  });
+
+  /* ---------- Three.js ---------- */
+  var canvas = $('gl');
+  var renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+  } catch (err) {
+    $('nogl').hidden = false;
+    return;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setClearColor(0x000000, 0);
+
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+  var root = new THREE.Group();
+  scene.add(root);
+  var camZ = 18;
+
+  function resize() {
+    var w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    var t = Math.tan(camera.fov * Math.PI / 360);
+    var zH = (R * 2.6) / 2 / t;
+    var zW = (R * 2.7 / camera.aspect) / 2 / t;
+    camZ = Math.max(zH, zW);
+    camera.position.set(0, 0, camZ);
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var N = DATA.length;
+  var cards = [];
+  var lineMats = [];
+  var GA = Math.PI * (3 - Math.sqrt(5));
+
+  DATA.forEach(function (item, i) {
+    var rnd = rng(50 + i * 13);
+    var y = 1 - 2 * (i + 0.5) / N;
+    var rr = Math.sqrt(1 - y * y), th = GA * i;
+    var pos = new THREE.Vector3(Math.cos(th) * rr, y, Math.sin(th) * rr).multiplyScalar(R * (0.96 + rnd() * 0.1));
+
+    var img = makeImage(item, i);
+    var tex = new THREE.CanvasTexture(img);
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.anisotropy = 4;
+
+    var rel = 0.75 + rnd() * 0.95;            // Relevanz bestimmt die Größe
+    var hgt = 1.15 * rel, wid = hgt * img.width / img.height;
+    var mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    var mesh = new THREE.Mesh(new THREE.PlaneGeometry(wid, hgt), mat);
+    mesh.position.copy(pos);
+    root.add(mesh);
+    mesh.lookAt(pos.clone().multiplyScalar(2));
+    mesh.userData = {
+      item: item, img: img, home: pos.clone(), q0: mesh.quaternion.clone(),
+      qStart: new THREE.Quaternion(), blend: 1, focused: false, w: wid, h: hgt, tl: null
+    };
+    cards.push(mesh);
+  });
+
+  // Verbindungen: Zentrum zu jeder Karte, dazu je eine Querverbindung zur nächsten Nachbarkarte
+  function addCurve(a, b, ctrl, opacity) {
+    var curve = new THREE.QuadraticBezierCurve3(a, ctrl, b);
+    var geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(28));
+    var m = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: opacity, depthWrite: false });
+    root.add(new THREE.Line(geo, m));
+    lineMats.push({ m: m, base: opacity });
+  }
+  var origin = new THREE.Vector3(0, 0, 0), up = new THREE.Vector3(0, 1, 0);
+  cards.forEach(function (c, i) {
+    var p = c.userData.home, rnd = rng(900 + i * 7);
+    var side = new THREE.Vector3().crossVectors(p, up).normalize().multiplyScalar((rnd() - 0.5) * R * 0.6);
+    addCurve(origin, p, p.clone().multiplyScalar(0.5).add(side), 0.34);
+  });
+  var seen = {};
+  cards.forEach(function (c, i) {
+    var best = -1, bd = 1e9;
+    cards.forEach(function (o, j) {
+      if (i === j) return;
+      var d = c.userData.home.distanceTo(o.userData.home);
+      if (d < bd) { bd = d; best = j; }
+    });
+    var key = Math.min(i, best) + '-' + Math.max(i, best);
+    if (seen[key]) return;
+    seen[key] = true;
+    var a = c.userData.home, b = cards[best].userData.home;
+    addCurve(a, b, a.clone().add(b).multiplyScalar(0.3), 0.18);
+  });
+
+  // Zentrumsknoten
+  (function () {
+    var cn = document.createElement('canvas'); cn.width = cn.height = 128;
+    var cg = cn.getContext('2d');
+    var rg = cg.createRadialGradient(64, 64, 0, 64, 64, 64);
+    rg.addColorStop(0, 'rgba(255,255,255,0.9)');
+    rg.addColorStop(0.25, 'rgba(255,255,255,0.28)');
+    rg.addColorStop(1, 'rgba(255,255,255,0)');
+    cg.fillStyle = rg; cg.fillRect(0, 0, 128, 128);
+    cg.fillStyle = '#fff'; cg.fillRect(52, 56, 24, 16);
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cn), transparent: true, depthWrite: false }));
+    sp.scale.set(2.2, 2.2, 1);
+    root.add(sp);
+  })();
+
+  /* ---------- Zustand ---------- */
+  var state = { mode: 'attract', angle: 0.6, tilt: BASE_TILT, dim: 0, focus: null };
+  var bgState = { g: DEF_G.slice(), b: DEF_B.slice() };
+  var bgEl = $('bg'), hint = $('hint'), hintText = $('hintText'), caption = $('caption'), detail = $('detail');
+  var idle = null, spinTween = null;
+
+  function applyBg() {
+    bgEl.style.setProperty('--glow', 'rgb(' + bgState.g.map(Math.round).join(',') + ')');
+    bgEl.style.setProperty('--base', 'rgb(' + bgState.b.map(Math.round).join(',') + ')');
+  }
+  function tintBg(g, b) {
+    gsap.to(bgState.g, { 0: g[0], 1: g[1], 2: g[2], duration: 1.2, ease: 'power2.inOut', onUpdate: applyBg });
+    gsap.to(bgState.b, { 0: b[0], 1: b[1], 2: b[2], duration: 1.2, ease: 'power2.inOut' });
+  }
+  function facTint(rgb) {
+    return [rgb.map(function (c) { return c * 0.38 + 8; }), rgb.map(function (c) { return c * 0.08 + 6; })];
+  }
+  applyBg();
+
+  gsap.set(caption, { autoAlpha: 0 });
+
+  function armIdle() { if (idle) idle.kill(); idle = gsap.delayedCall(IDLE, resetToAttract); }
+  function killIdle() { if (idle) { idle.kill(); idle = null; } }
+
+  /* ---------- Karte in die Mitte holen und zurückgeben ---------- */
+  function previewFit(c) {
+    var d = camZ - PZ;
+    var visH = 2 * d * Math.tan(camera.fov * Math.PI / 360);
+    var visW = visH * camera.aspect;
+    return Math.min(visW * 0.62 / c.userData.w, visH * 0.5 / c.userData.h);
+  }
+  function syncRoot() {
+    root.rotation.set(state.tilt, state.angle, 0);
+    root.updateMatrixWorld(true);
+  }
+
+  function showCaption(item) {
+    var f = FAC[item.f];
+    var tag = $('capTag'); tag.textContent = f.name; tag.style.setProperty('--c', f.hex);
+    $('capTitle').textContent = item.t;
+    $('capMeta').textContent = item.k + ' · ' + item.d;
+    gsap.fromTo(caption, { autoAlpha: 0, y: 18 }, { autoAlpha: 1, y: 0, duration: 0.6, delay: 0.7, ease: 'power3.out' });
+  }
+
+  function focusCard(c) {
+    var u = c.userData;
+    gsap.killTweensOf([c.position, c.scale, u]);
+    u.blend = 1; u.focused = true; state.focus = c;
+    syncRoot();
+    scene.attach(c);
+    var f = previewFit(c);
+    var q0 = c.quaternion.clone(), q1 = new THREE.Quaternion(), p = { t: 0 };
+    u.tl = gsap.timeline({ defaults: { duration: 1.2, ease: 'power3.inOut' } });
+    u.tl.to(p, { t: 1, onUpdate: function () { c.quaternion.copy(q0).slerp(q1, p.t); } }, 0)
+        .to(c.position, { x: 0, y: 0.25, z: PZ }, 0)
+        .to(c.scale, { x: f, y: f, z: f }, 0)
+        .to(state, { dim: 1, duration: 1 }, 0);
+    var tint = facTint(FAC[u.item.f].rgb);
+    tintBg(tint[0], tint[1]);
+    showCaption(u.item);
+    state.mode = 'preview';
+    armIdle();
+  }
+
+  function unfocus() {
+    var c = state.focus;
+    if (!c) return;
+    var u = c.userData;
+    if (u.tl) u.tl.kill();
+    gsap.killTweensOf([c.position, c.scale, u]);
+    syncRoot();
+    root.attach(c);
+    u.qStart.copy(c.quaternion);
+    u.blend = 0; u.focused = false; state.focus = null;
+    gsap.to(c.position, { x: u.home.x, y: u.home.y, z: u.home.z, duration: 1, ease: 'power3.inOut' });
+    gsap.to(c.scale, { x: 1, y: 1, z: 1, duration: 1, ease: 'power3.inOut' });
+    gsap.to(u, { blend: 1, duration: 1, ease: 'power3.inOut' });
+    gsap.to(state, { dim: 0, duration: 0.9 });
+  }
+
+  /* ---------- Spin ---------- */
+  function startSpin(dir, s) {
+    state.mode = 'spinning';
+    var turns = 0.6 + s * 1.6;                       // schneller wischen = mehr Umdrehungen
+    var dist = dir * turns * Math.PI * 2;
+    var dur = Math.min(6.5, 2.2 + s * 0.9);          // und längerer Nachlauf
+    spinTween = gsap.to(state, { angle: state.angle + dist, duration: dur, ease: 'power3.out', onComplete: finishSpin });
+    gsap.to(state, { tilt: (Math.random() - 0.5) * 0.9, duration: dur * 0.8, ease: 'power2.out' });
+  }
+
+  function finishSpin() {
+    spinTween = null;
+    syncRoot();
+    var v = new THREE.Vector3(), best = null, bz = -2;
+    cards.forEach(function (c) {
+      v.copy(c.userData.home).applyQuaternion(root.quaternion).normalize();
+      if (v.z > bz) { bz = v.z; best = c; }
+    });
+    if (best) focusCard(best);
+  }
+
+  function beginDrag() {
+    killIdle();
+    if (spinTween) { spinTween.kill(); spinTween = null; }
+    if (state.mode === 'preview') unfocus();
+    gsap.to(caption, { autoAlpha: 0, duration: 0.25 });
+    gsap.to(hint, { autoAlpha: 0, duration: 0.3 });
+    state.mode = 'dragging';
+  }
+
+  function resetToAttract() {
+    killIdle();
+    if (spinTween) { spinTween.kill(); spinTween = null; }
+    if (!detail.hidden) detail.hidden = true;
+    unfocus();
+    gsap.to(caption, { autoAlpha: 0, duration: 0.3 });
+    gsap.to(hint, { autoAlpha: 1, duration: 0.6, delay: 0.6 });
+    gsap.to(state, { dim: 0, tilt: BASE_TILT, duration: 1.2, ease: 'power2.inOut' });
+    tintBg(DEF_G, DEF_B);
+    state.mode = 'attract';
+  }
+
+  /* ---------- Detailansicht ---------- */
+  function openDetail() {
+    var c = state.focus; if (!c) return;
+    var item = c.userData.item, f = FAC[item.f];
+    if (!c.userData.url) c.userData.url = c.userData.img.toDataURL('image/jpeg', 0.9);
+    $('detImg').src = c.userData.url;
+    $('detImg').alt = 'Platzhalterbild zu ' + item.t;
+    var tag = $('detTag'); tag.textContent = f.name; tag.style.setProperty('--c', f.hex);
+    $('detTitle').textContent = item.t;
+    $('detKind').textContent = item.k;
+    $('detDate').textContent = item.d;
+    $('detFac').textContent = f.name;
+    $('detText').textContent = item.x;
+    var dark = f.rgb.map(function (v) { return Math.round(v * 0.2 + 10); });
+    detail.style.setProperty('--detail-bg', 'rgb(' + dark.join(',') + ')');
+    detail.hidden = false;
+    state.mode = 'detail';
+    gsap.fromTo(detail, { clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(150% at 50% 50%)', duration: 0.8, ease: 'power3.inOut' });
+    armIdle();
+  }
+  function closeDetail() {
+    if (state.mode !== 'detail') return;
+    gsap.to(detail, { clipPath: 'circle(0% at 50% 50%)', duration: 0.6, ease: 'power3.inOut', onComplete: function () {
+      detail.hidden = true; state.mode = 'preview'; armIdle();
+    } });
+  }
+  $('detClose').addEventListener('click', closeDetail);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDetail(); });
+  document.addEventListener('pointerdown', function () {
+    if (state.mode === 'preview' || state.mode === 'detail') armIdle();
+  }, true);
+
+  /* ---------- Touch und Maus ---------- */
+  var drag = null;
+  var ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+
+  function hitPreview(e) {
+    if (!state.focus) return false;
+    ndc.set(e.clientX / window.innerWidth * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    if (ray.intersectObject(state.focus).length > 0) return true;
+    return e.clientY > caption.getBoundingClientRect().top;
+  }
+  function handleTap(e) {
+    if (state.mode === 'preview') {
+      if (hitPreview(e)) openDetail(); else resetToAttract();
+    } else if (state.mode === 'attract') {
+      gsap.fromTo(hintText, { x: -10 }, { x: 0, duration: 0.7, ease: 'elastic.out(1, 0.4)' });
+    }
+  }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    if (state.mode === 'detail') return;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    drag = { sx: e.clientX, sy: e.clientY, lx: e.clientX, moved: false, caught: false, s: [{ x: e.clientX, t: performance.now() }] };
+    if (state.mode === 'spinning' && spinTween) {
+      spinTween.kill(); spinTween = null;
+      gsap.killTweensOf(state, 'tilt');
+      drag.caught = true;
+    }
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 8) return;
+      drag.moved = true; drag.lx = e.clientX; beginDrag();
+    }
+    state.angle += (e.clientX - drag.lx) * 0.0065;
+    drag.lx = e.clientX;
+    var now = performance.now();
+    drag.s.push({ x: e.clientX, t: now });
+    while (drag.s.length > 2 && now - drag.s[0].t > 110) drag.s.shift();
+  });
+  function endDrag(e) {
+    if (!drag) return;
+    var d = drag; drag = null;
+    if (!d.moved) {
+      if (d.caught) finishSpin(); else handleTap(e);
+      return;
+    }
+    var now = performance.now(), a = d.s[0], b = d.s[d.s.length - 1], v = 0;
+    if (now - b.t < 90 && b.t - a.t > 12) v = (b.x - a.x) / (b.t - a.t);   // Pixel pro Millisekunde
+    var dir = v !== 0 ? Math.sign(v) : (Math.random() < 0.5 ? -1 : 1);
+    startSpin(dir, Math.min(4, Math.max(0.35, Math.abs(v))));
+  }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  /* ---------- Touchhinweis ---------- */
+  (function () {
+    var path = $('hintPath'), dot = $('hintDot');
+    var len = path.getTotalLength(), sw = { p: 0 };
+    gsap.timeline({ repeat: -1, repeatDelay: 0.7 })
+      .fromTo(sw, { p: 0 }, { p: 1, duration: 1.6, ease: 'power2.inOut', onUpdate: function () {
+        var pt = path.getPointAtLength(sw.p * len);
+        dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
+        dot.setAttribute('opacity', Math.sin(sw.p * Math.PI).toFixed(3));
+      } });
+    gsap.to(hintText, { scale: 1.04, duration: 1.1, repeat: -1, yoyo: true, ease: 'sine.inOut' });
+  })();
+
+  /* ---------- Render-Schleife ---------- */
+  var clock = new THREE.Clock();
+  var qInv = new THREE.Quaternion(), qT = new THREE.Quaternion(), tmp = new THREE.Vector3();
+
+  function tick() {
+    var dt = Math.min(clock.getDelta(), 0.05);
+    if (state.mode === 'attract' && !reduce) state.angle += dt * 0.16;
+    root.rotation.set(state.tilt, state.angle, 0);
+    qInv.copy(root.quaternion).invert();
+
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i], u = c.userData;
+      if (u.focused) { c.material.color.setScalar(1); continue; }
+      qT.copy(u.q0).slerp(qInv, 0.6);                       // Karten drehen sich teilweise zur Kamera
+      if (u.blend < 1) c.quaternion.copy(u.qStart).slerp(qT, u.blend); else c.quaternion.copy(qT);
+      tmp.copy(u.home).applyQuaternion(root.quaternion);
+      var t = THREE.MathUtils.clamp((tmp.z + R) / (2 * R), 0, 1);
+      var b = (0.26 + 0.74 * Math.pow(t, 1.25)) * (1 - 0.72 * state.dim);   // Tiefe als Helligkeit
+      c.material.color.setScalar(b);
+    }
+    for (var k = 0; k < lineMats.length; k++) lineMats[k].m.opacity = lineMats[k].base * (1 - 0.8 * state.dim);
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+</script>
+
+</body></html>
